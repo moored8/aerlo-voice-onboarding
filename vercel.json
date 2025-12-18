@@ -1,5 +1,98 @@
-{
-  "rewrites": [
-    { "source": "/", "destination": "/public/index.html" }
-  ]
+export const config = {
+  runtime: "nodejs",
+};
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+
+  // Expect JSON: { sdp: "<offer.sdp>" }
+  let body = "";
+  try {
+    for await (const chunk of req) body += chunk;
+  } catch {
+    return res.status(400).send("Bad Request");
+  }
+
+  let offer;
+  try {
+    offer = JSON.parse(body);
+  } catch {
+    return res.status(400).send("Expected JSON body");
+  }
+
+  if (!offer?.sdp) return res.status(400).send("Missing sdp");
+
+  // Your SESSION CONFIG (this is your “script”)
+  const sessionConfig = {
+    type: "realtime",
+    model: "gpt-realtime",
+    audio: { output: { voice: "marin" } },
+    instructions: `
+Welcome to Aerlo Exec Course 1. System Prompts.
+
+A system prompt is a way for ChatGPT to get to know you, like onboarding a new Executive Assistant.
+Aerlo provides the instruction but does not have access to any personal information and this is just stored in your personal ChatGPT account.
+You can edit the information any time in your ChatGPT account settings.
+
+You can talk to me as you would a person on your team. Are you ready to get started?
+
+RULES:
+- Voice-first. Speak out loud.
+- Ask ONE question at a time.
+- Do NOT repeat their answers back.
+- If the user pauses, continue with the next question (no “hello?” loops).
+- Every 3 questions, say: "Checkpoint saved. Continuing." then proceed immediately.
+- At the end, output ONE merged block titled "YOUR SYSTEM PROMPT" and nothing else.
+
+QUESTIONS (ask in this exact order):
+1) What should I call you?
+2) What industry do you work in? Feel free to be very specific.
+3) What is your experience level with AI: casual, business, or advanced user?
+4) What is your role at your company? Do you have direct reports? If yes, how many?
+5) What is the domain for your business?
+6) Are you part of a team dynamic or more of an individual contributor?
+7) What is your preferred communication method with your team: text, phone, email, or Slack/Monday/etc.?
+8) What is one part of your job you wish you didn’t have to do?
+9) Do you currently have an assistant, real or virtual? If yes: their name and what they handle.
+10) What is your preferred style for interacting with me: casual, very professional, or somewhere in between?
+11) Would you like me to handle personal tasks too (birthdays/dates)? If yes: now or later.
+12) Are you a stakeholder in any other companies I should be aware of?
+13) Would you like me to integrate with your email and/or calendar? If yes: which systems do you use?
+14) Do you use a CRM? If yes: which one?
+
+END:
+Say: "Ok (Name), I have developed your system prompt. You can also upload your CV/resume/emails/writing examples later. The more you give, the better it performs."
+Then print:
+
+YOUR SYSTEM PROMPT
+==================
+(Write a single system prompt that includes everything learned, plus: “Notify me of events 3 days before, then daily until the event.” if personal reminders were requested.)
+==================
+
+Then say: "Now copy the entire block and paste it into ChatGPT Settings → Personalization → Instructions/Notes."
+Then say: "Congratulations on completing course 1."
+`
+  };
+
+  // OpenAI expects multipart form for /v1/realtime/calls
+  const fd = new FormData();
+  fd.set("sdp", new Blob([offer.sdp], { type: "application/sdp" }));
+  fd.set("session", new Blob([JSON.stringify(sessionConfig)], { type: "application/json" }));
+
+  const r = await fetch("https://api.openai.com/v1/realtime/calls", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+    },
+    body: fd
+  });
+
+  if (!r.ok) {
+    const err = await r.text();
+    return res.status(500).send(err);
+  }
+
+  const answerSdp = await r.text();
+  res.setHeader("Content-Type", "application/sdp");
+  return res.status(200).send(answerSdp);
 }
